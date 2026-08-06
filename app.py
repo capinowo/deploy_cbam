@@ -9,7 +9,15 @@ import streamlit as st
 
 from config import MODEL_REGISTRY
 from model_loader import load_model
-from utils import convert_uploaded_image, draw_detections, open_video_writer, summarize_result
+from utils import (
+    convert_uploaded_image,
+    draw_detections,
+    draw_gt_boxes,
+    evaluate_against_gt,
+    open_video_writer,
+    parse_yolo_label,
+    summarize_result,
+)
 
 st.set_page_config(
     page_title="Perbandingan YOLOv12n + CBAM - Deteksi Plat Nomor",
@@ -51,6 +59,19 @@ with st.sidebar:
     else:
         use_tracker = False
         max_frames = None
+        eval_mode = st.radio(
+            "Mode evaluasi gambar",
+            ["Tanpa ground truth", "Dengan ground truth (hitung mAP)"],
+            help="Pilih 'Dengan ground truth' kalau mau upload label buat hitung Precision/Recall/AP.",
+        )
+        if eval_mode == "Dengan ground truth (hitung mAP)":
+            map_iou_threshold = st.slider(
+                "IoU threshold untuk evaluasi mAP",
+                0.1, 0.9, 0.5, 0.05,
+                help="Prediksi dianggap TP (benar) kalau IoU-nya sama ground truth >= threshold ini.",
+            )
+        else:
+            map_iou_threshold = 0.5
 
     st.divider()
     st.caption(
@@ -77,19 +98,54 @@ def _run_predict(model, image_bgr, tracker: bool):
 
 # ==================== GAMBAR ====================
 if input_type == "Gambar":
-    uploaded = st.file_uploader("Upload gambar", type=["jpg", "jpeg", "png"])
+    if eval_mode == "Dengan ground truth (hitung mAP)":
+        upload_col, label_col = st.columns(2)
+        with upload_col:
+            uploaded = st.file_uploader("Upload gambar", type=["jpg", "jpeg", "png"])
+        with label_col:
+            uploaded_label = st.file_uploader(
+                "Upload label ground truth (format YOLO txt: class x_center y_center width height, normalized)",
+                type=["txt"],
+                help="Aplikasi akan hitung Precision, Recall, dan AP (mAP) "
+                     "per model dengan membandingkan prediksi ke ground truth ini.",
+            )
+    else:
+        uploaded = st.file_uploader("Upload gambar", type=["jpg", "jpeg", "png"])
+        uploaded_label = None
 
     if uploaded:
         image_bgr = convert_uploaded_image(uploaded)
-        st.image(
-            cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
-            caption="Gambar asli", use_container_width=True,
-        )
+        img_h, img_w = image_bgr.shape[:2]
+
+        gt_boxes = []
+        if uploaded_label:
+            gt_boxes = parse_yolo_label(uploaded_label.getvalue(), img_w, img_h)
+            if not gt_boxes:
+                st.warning("File label ke-upload tapi gak ada box valid yang ke-parse. Cek lagi formatnya.")
+
+        preview_img = image_bgr.copy()
+        if gt_boxes:
+            preview_img = draw_gt_boxes(preview_img, gt_boxes)
+
+        _, preview_col, _ = st.columns([1, 2, 1])
+        with preview_col:
+            st.image(
+                cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB),
+                caption=f"Gambar asli{' + ground truth (kotak putih)' if gt_boxes else ''}",
+                use_container_width=True,
+            )
+            if gt_boxes:
+                st.caption(f"Ground truth: {len(gt_boxes)} plat ditandai.")
 
         if st.button("🚀 Jalankan Deteksi", type="primary"):
             summary_rows = []
-            n_cols = min(len(selected_labels), 3)
-            cols = st.columns(n_cols)
+            if len(selected_labels) == 1:
+                _, mid_col, _ = st.columns([1, 2, 1])
+                cols = [mid_col]
+                n_cols = 1
+            else:
+                n_cols = min(len(selected_labels), 3)
+                cols = st.columns(n_cols)
 
             for i, label in enumerate(selected_labels):
                 repo_id = MODEL_REGISTRY[label]
@@ -108,6 +164,8 @@ if input_type == "Gambar":
                         continue
 
                     annotated = draw_detections(image_bgr.copy(), result, label)
+                    if gt_boxes:
+                        annotated = draw_gt_boxes(annotated, gt_boxes)
                     stats = summarize_result(result)
 
                     st.image(
@@ -118,13 +176,34 @@ if input_type == "Gambar":
                     st.metric("Jumlah deteksi", stats["n_det"])
                     st.metric("Confidence rata-rata", f"{stats['avg_conf']:.3f}")
 
-                    summary_rows.append({
+                    row = {
                         "Model": label,
                         "Jumlah Deteksi": stats["n_det"],
                         "Confidence Rata-rata": round(stats["avg_conf"], 3),
                         "Confidence Maks": round(stats["max_conf"], 3),
                         "Inference Time (ms)": round(infer_ms, 2),
-                    })
+                    }
+
+                    if gt_boxes:
+                        eval_metrics = evaluate_against_gt(
+                            result, gt_boxes, iou_threshold=map_iou_threshold
+                        )
+                        st.metric(f"AP (mAP@{map_iou_threshold:.2f})", f"{eval_metrics['ap']:.3f}")
+                        st.caption(
+                            f"Precision: {eval_metrics['precision']:.3f} | "
+                            f"Recall: {eval_metrics['recall']:.3f} | "
+                            f"TP: {eval_metrics['tp']} FP: {eval_metrics['fp']} FN: {eval_metrics['fn']}"
+                        )
+                        row.update({
+                            "Precision": round(eval_metrics["precision"], 3),
+                            "Recall": round(eval_metrics["recall"], 3),
+                            f"AP (mAP@{map_iou_threshold:.2f})": round(eval_metrics["ap"], 3),
+                            "TP": eval_metrics["tp"],
+                            "FP": eval_metrics["fp"],
+                            "FN": eval_metrics["fn"],
+                        })
+
+                    summary_rows.append(row)
 
             if summary_rows:
                 st.divider()

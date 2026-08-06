@@ -1,8 +1,10 @@
-streamlit
-opencv-python-headless
-ultralytics
-huggingface_hub
-pillow
-numpy
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
+
+streamlit>=1.35
+ultralytics>=8.3.0
+opencv-python-headless>=4.9
+huggingface_hub>=0.23
+Pillow>=10.0
+numpy<2.0
