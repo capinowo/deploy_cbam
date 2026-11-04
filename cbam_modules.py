@@ -1,13 +1,3 @@
-"""
-Class custom untuk memuat checkpoint skripsi.
-Hanya SafeChannelAttention yang perlu didaftarkan (di-pickle sebagai __main__.SafeChannelAttention
-dari notebook Kaggle). Bentuknya: average pooling -> Conv2d 1x1 (C->C, tanpa bias) -> sigmoid.
-Spatial Attention dan CBAM memakai modul bawaan Ultralytics.
-
-PENTING: saat checkpoint di-load, __init__ TIDAK dipanggil. Yang dipakai hanya forward di bawah
-+ layer yang tersimpan di file .pt, jadi forward tidak boleh bergantung pada nama atribut tebakan.
-"""
-
 import sys
 
 import torch
