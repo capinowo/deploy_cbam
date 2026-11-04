@@ -96,6 +96,17 @@ def _run_predict(model, image_bgr, tracker: bool):
     )[0]
 
 
+def _find_ffmpeg():
+    """Pakai ffmpeg sistem kalau ada; kalau tidak, pakai binary bawaan paket pip imageio-ffmpeg."""
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
 # ==================== GAMBAR ====================
 if input_type == "Gambar":
     if eval_mode == "Dengan ground truth (hitung mAP)":
@@ -307,7 +318,7 @@ elif input_type == "Video":
 
                 # coba transcode ke H.264 biar bisa diputar langsung di browser
                 browser_path = tmp_out_path
-                ffmpeg_bin = shutil.which("ffmpeg")
+                ffmpeg_bin = _find_ffmpeg()
                 if ffmpeg_bin:
                     h264_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
                     cmd = [
